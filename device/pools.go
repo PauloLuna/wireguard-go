@@ -11,7 +11,7 @@ import (
 )
 
 type WaitPool struct {
-	pool  sync.Pool
+	pool  []any
 	cond  sync.Cond
 	lock  sync.Mutex
 	count atomic.Uint32
@@ -27,29 +27,34 @@ var (
 )
 
 func NewWaitPool(max uint32, new func() any) *WaitPool {
-	p := &WaitPool{pool: sync.Pool{New: new}, max: max}
+	pool := make([]any, max)
+	var i uint32
+	for i = 0; i < max; i++ {
+		pool[i] = new()
+	}
+	p := &WaitPool{pool: pool, max: max}
 	p.cond = sync.Cond{L: &p.lock}
 	return p
 }
 
 func (p *WaitPool) Get() any {
-	if p.max != 0 {
-		p.lock.Lock()
-		for p.count.Load() >= p.max {
-			p.cond.Wait()
-		}
-		p.count.Add(1)
-		p.lock.Unlock()
+
+	for p.count.Load() >= p.max {
+		p.cond.Wait()
 	}
-	return p.pool.Get()
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	item := p.pool[p.count.Load()]
+	p.count.Add(1)
+	return item
 }
 
 func (p *WaitPool) Put(x any) {
-	p.pool.Put(x)
-	if p.max == 0 {
-		return
-	}
+	p.lock.Lock()
 	p.count.Add(^uint32(0))
+	p.pool[p.count.Load()] = x
+	p.lock.Unlock()
+
 	p.cond.Signal()
 }
 
