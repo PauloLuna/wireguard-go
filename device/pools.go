@@ -11,15 +11,24 @@ import (
 )
 
 type WaitPool struct {
-	new   func() any
+	pool  sync.Pool
 	cond  sync.Cond
 	lock  sync.Mutex
 	count atomic.Uint32
 	max   uint32
 }
 
+var (
+	inboundElementsContainer  *WaitPool
+	outboundElementsContainer *WaitPool
+	messageBuffers            *WaitPool
+	inboundElements           *WaitPool
+	outboundElements          *WaitPool
+)
+
 func NewWaitPool(max uint32, new func() any) *WaitPool {
-	p := &WaitPool{new: new}
+	p := &WaitPool{pool: sync.Pool{New: new}, max: max}
+	p.cond = sync.Cond{L: &p.lock}
 	return p
 }
 
@@ -32,10 +41,11 @@ func (p *WaitPool) Get() any {
 		p.count.Add(1)
 		p.lock.Unlock()
 	}
-	return p.new()
+	return p.pool.Get()
 }
 
-func (p *WaitPool) Put(_ any) {
+func (p *WaitPool) Put(x any) {
+	p.pool.Put(x)
 	if p.max == 0 {
 		return
 	}
@@ -44,23 +54,42 @@ func (p *WaitPool) Put(_ any) {
 }
 
 func (device *Device) PopulatePools() {
-	device.pool.inboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
-		s := make([]*QueueInboundElement, 0, device.BatchSize())
-		return &QueueInboundElementsContainer{elems: s}
-	})
-	device.pool.outboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
-		s := make([]*QueueOutboundElement, 0, device.BatchSize())
-		return &QueueOutboundElementsContainer{elems: s}
-	})
-	device.pool.messageBuffers = NewWaitPool(PreallocatedBuffersPerPool, func() any {
-		return new([MaxMessageSize]byte)
-	})
-	device.pool.inboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
-		return new(QueueInboundElement)
-	})
-	device.pool.outboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
-		return new(QueueOutboundElement)
-	})
+	if inboundElementsContainer == nil {
+		inboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+			s := make([]*QueueInboundElement, 0, device.BatchSize())
+			return &QueueInboundElementsContainer{elems: s}
+		})
+	}
+	device.pool.inboundElementsContainer = inboundElementsContainer
+
+	if outboundElementsContainer == nil {
+		outboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+			s := make([]*QueueOutboundElement, 0, device.BatchSize())
+			return &QueueOutboundElementsContainer{elems: s}
+		})
+	}
+	device.pool.outboundElementsContainer = outboundElementsContainer
+
+	if messageBuffers == nil {
+		messageBuffers = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+			return new([MaxMessageSize]byte)
+		})
+	}
+	device.pool.messageBuffers = messageBuffers
+
+	if inboundElements == nil {
+		inboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+			return new(QueueInboundElement)
+		})
+	}
+	device.pool.inboundElements = inboundElements
+
+	if outboundElements == nil {
+		outboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+			return new(QueueOutboundElement)
+		})
+	}
+	device.pool.outboundElements = outboundElements
 }
 
 func (device *Device) GetInboundElementsContainer() *QueueInboundElementsContainer {
