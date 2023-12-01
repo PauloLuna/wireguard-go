@@ -7,42 +7,22 @@ package device
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type WaitPool struct {
-	pool  sync.Pool
-	cond  sync.Cond
-	lock  sync.Mutex
-	count atomic.Uint32
-	max   uint32
+	new func() any
 }
 
 func NewWaitPool(max uint32, new func() any) *WaitPool {
-	p := &WaitPool{pool: sync.Pool{New: new}, max: max}
-	p.cond = sync.Cond{L: &p.lock}
+	p := &WaitPool{new: new}
 	return p
 }
 
 func (p *WaitPool) Get() any {
-	if p.max != 0 {
-		p.lock.Lock()
-		for p.count.Load() >= p.max {
-			p.cond.Wait()
-		}
-		p.count.Add(1)
-		p.lock.Unlock()
-	}
-	return p.pool.Get()
+	return p.new()
 }
 
-func (p *WaitPool) Put(x any) {
-	p.pool.Put(x)
-	if p.max == 0 {
-		return
-	}
-	p.count.Add(^uint32(0))
-	p.cond.Signal()
+func (p *WaitPool) Put(_ any) {
 }
 
 func (device *Device) PopulatePools() {
